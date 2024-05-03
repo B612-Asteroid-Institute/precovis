@@ -1,3 +1,7 @@
+# Amelia is Ignoring This Stuff
+index.db
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
