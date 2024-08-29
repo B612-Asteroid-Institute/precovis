@@ -1,0 +1,17 @@
+Precovis Version Changelog:
+Version v001:
+- Initial version
+
+
+Version v002:
+- Added findIntersections(frames, coords_df, observatory, dataset_id)
+- Added plotIntersectionTimeline(plot, intersections)
+- Changed plotHealpixels() to plotHealpixelsMap()
+- Fixed table_callback to properly update visible rows to match with mjd_slider
+- Fixed methods that ended in plot to return a plot
+- Fixed plotIntersectingHealpixels() 
+	- Added argument 'intersections' to plotIntersectingHealpixels
+	- Changed method name from plotIntersectingHealpixels() to plotIntersectionHealpixelsMap() 
+	- Fixed method to correctly find intersections between frames and orbit tables
+	- Removed variable 'dur', 'objectName', 'startDate', 'endDate' from plotIntersectingHealpixels
+	
