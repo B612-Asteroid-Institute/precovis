@@ -1,5 +1,11 @@
 # Amelia is Ignoring This Stuff
 index.db
+precovisapp.py
+data/
+tests/adam_core_examples.ipynb
+tests/orbit_database_exploration.ipynb
+src/myapp.py
+src/*.html
 
 
 # Byte-compiled / optimized / DLL files
