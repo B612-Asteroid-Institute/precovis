@@ -18,25 +18,29 @@ import healpy as hp
 
 from datetime import date
 
-from bokeh.plotting import figure, output_file, show, save
-from bokeh.models import Range1d, Column, Row, CustomJS, DateRangeSlider, DateSlider, RangeSlider, Div, Slider, ColumnDataSource
+from bokeh.plotting import figure, output_file, show, save, output_notebook
+from bokeh.models import Range1d, Column, Row, CustomJS, DateRangeSlider, DateSlider, RangeSlider, Div, Slider, ColumnDataSource, HoverTool, TapTool, PanTool, BoxZoomTool, ResetTool, NumeralTickFormatter, Select
 from bokeh.models.tools import BoxZoomTool, ResetTool, HoverTool, TapTool
 from bokeh.events import DoubleTap, ButtonClick
-from bokeh.layouts import layout
+from bokeh.layouts import layout, gridplot
 from bokeh.io import curdoc
 from bokeh.document import Document
 from bokeh.models.widgets import DataTable, DateFormatter, TableColumn, Button, AbstractButton
 
 from bokeh.models import ColorBar, ColumnDataSource
-from bokeh.palettes import Spectral6
+from bokeh.palettes import Spectral6, Spectral10, TolRainbow10, Bokeh8, Category10
 from bokeh.plotting import figure, output_file, show
 from bokeh.transform import linear_cmap
+
+
 
 
 NSIDE = 32
 NPIX = hp.nside2npix(NSIDE)
 con = sql.connect("index.db")
 frames = pd.read_sql("""SELECT * FROM frames""", con)
+
+
 
 
 def prepareOrbit(asteroid):
@@ -78,8 +82,9 @@ def prepareOrbit(asteroid):
 
 
 
+
 def asteroidPath(orbit,start,end):
-    """Return dataframe containing the ra, dec and time of a given object's orbit within the given timeframe
+    """Return dataframe containing the ra, dec, healpixel, and time of a given object's orbit within the given timeframe
     
     Keyword arguments:
     orbit -- string name of the object
@@ -91,15 +96,20 @@ def asteroidPath(orbit,start,end):
     ra = []
     dec = []
     time = []
+    indeces = []
+    index = 0
     for ephemeris in ephemeris_list:
         ra.append(ephemeris.ra)
         dec.append(ephemeris.dec)
         time.append(ephemeris.mjd)
+        indeces.append(index)
+        index = index + 1
 
-    coords_df = pd.DataFrame({"ra": ra, "dec": dec, "time": time})
+    coords_df = pd.DataFrame({"ra": ra, "dec": dec, "time": time, "index": indeces})
     coords_df['healpixel'] = coordToPixel(coords_df['dec'].values,coords_df['ra'].values)
     
     return coords_df
+
 
 
 
@@ -112,9 +122,11 @@ def pixelToCoord(vectors):
 
 
 
+
 def coordToPixel(dec,ra):
     """Return the healpixel tuple from a given ra and dec"""
     return hp.pixelfunc.ang2pix(NSIDE,np.radians(-dec+90.),np.radians(360.-ra))
+
 
 
 
@@ -131,6 +143,7 @@ def pixelToBoundaries(pixels):
 
 
 
+
 def findGraphTransitions(coords):
     """Return a list of indexes where the ra and dec of a line with cross from one edge of the graph to the other"""
     large_diff = [0]
@@ -139,6 +152,7 @@ def findGraphTransitions(coords):
             large_diff.append(i)
     large_diff.append(len(coords)-1)
     return large_diff
+
 
 
 
@@ -162,7 +176,7 @@ def mjdSliderCreation(startDate,endDate):
 
 
 
-def tableCreation(dataframe, fields):
+def tableCreation(dataframe):
     """Create and return bokeh table from dataframe. 
 
     Keyword arguments:
@@ -173,7 +187,8 @@ def tableCreation(dataframe, fields):
     table_source = ColumnDataSource(data=dataframe)
     global table_ref_source
     table_ref_source = ColumnDataSource(data=dataframe)
-
+       
+    fields = table_source.data.keys()
     columns = [TableColumn(field=x, title=x) for x in fields]
 
     data_table = DataTable(source=table_source, columns=columns, editable=True, height=500, width=900,index_width=60)
@@ -182,72 +197,122 @@ def tableCreation(dataframe, fields):
 
 
 
-def plotIntercectingHealpixels(plot, objectName, startDate, endDate, dur):    
-    """Plot healpixels that intercept with an object's orbit and date within the time range (startDate, endDate) as bokeh patches on a given plot. 
+def findIntersections(frames, coords_df, observatory="I41", dataset_id="ztf"):
+    """Return list of healpixels that intersect with an object's orbit and date within the time range (startDate, endDate)  and the table of intersections with information from the frames and orbit tables.
+
+    Keyword arguments:
+    frames -- table of healpixel frames as a function of survey time
+    coords_df -- table of representing orbit's trajectory on the sky
+    observatory -- observatory where the desired frames were captured
+    dataset_id -- identification of dataset where the desired frames were captured
+    """
+    #Filler Set-up for ensuring correct variable types
+    frame_filler_info1 = [-1, dataset_id, observatory,'ztf_exp_59123.10523','g', -0.105232, -0.105058, 30.0, -7000,'ztf/2020-10/frames_00000001.data', 0, 79]
+    frame_filler_info2 = [-2, dataset_id, observatory,'ztf_exp_59123.10523','g',-0.105232, -0.105058, 30.0, -7001,'ztf/2020-10/frames_00000001.data', 0, 79]
+    frame_filler_row = pd.DataFrame(columns=['id', 'dataset_id', 'obscode', 'exposure_id', 'filter','exposure_mjd_start', 'exposure_mjd_mid', 'exposure_duration','healpixel', 'data_uri', 'data_offset', 'data_length'], data=[frame_filler_info1, frame_filler_info2])
+    obs_frames = pd.concat([frames, frame_filler_row], axis=0)
+
+    coords_filler_info1 = [400, 400, -0.105100, -7000]
+    coords_filler_info2 = [400, 400, -0.105100, -7001]
+    coords_filler_row = pd.DataFrame(columns=['ra','dec','time','healpixel'], data=[coords_filler_info1,coords_filler_info2])
+    coords_df = pd.concat([coords_df, coords_filler_row], axis=0)
+
+    
+    #Observatory/Dataset Filtering and Tables' Column Set-up
+    obs_frames = obs_frames[(obs_frames["obscode"] == observatory) & (obs_frames["dataset_id"] == dataset_id)]
+    obs_frames["exposure_tolerance"] = (obs_frames["exposure_mjd_mid"] - obs_frames["exposure_mjd_start"]).astype(float)
+    obs_frames["exposure_mjd_end"] = (obs_frames["exposure_mjd_start"] + (2*(obs_frames["exposure_mjd_mid"] - obs_frames["exposure_mjd_start"]))).astype(float)  
+  
+
+    #Intersection Creation
+    intersections = pd.merge(obs_frames, coords_df, how='inner', on='healpixel')
+    intersections = intersections[(intersections['time']>=intersections['exposure_mjd_start']) & (intersections['time']<=intersections['exposure_mjd_end'])]
+    intersections = intersections[intersections['healpixel']>0]
+    pixels = list(intersections['healpixel'].drop_duplicates().sort_values())
+    
+    return intersections
+
+
+
+
+def plotIntersectionTimeline(plot, intersections):
+    """Plot intersections in a timeline-like plot
 
     Keyword arguments:
     plot -- the bokeh figure where the orbit's path is plotted
-    objectName -- string name of the object
-    startDate -- integer mjd value of the start of the time range of the time column
-    endDate -- integer mjd value of the end of the time range of the time column (inclusive)
-    dur -- float value of how similar the healpixels and the frames mjd values can be
+    intersections -- table of intersections between frames and orbit tables with respect to time and healpixels
     """
+    pixels = list(intersections['healpixel'].drop_duplicates().sort_values())
     
-    #Orbit Set-up
-    coords_df, transitions_orbit = objectToCoordsDF(objectName, startDate, endDate, transitions=True)
+    condensed_pixel_dict = {}
+    color_pixel_dict = {}
+    i = 0
+    for pixel in pixels:
+        condensed_pixel_dict[pixel] = i
+        color_pixel_dict[pixel] = Spectral10[i%10]
+        i = i + 1
 
+    intersections['condensed_healpixel'] = intersections['healpixel'].map(condensed_pixel_dict)
+    intersections['color'] = intersections['healpixel'].map(color_pixel_dict)
+    intersections['start_end'] = exposure_start_end = list(zip(intersections.exposure_mjd_start, intersections.exposure_mjd_end))
+    intersections['healpixel_tuple'] = list(zip(intersections.condensed_healpixel, intersections.condensed_healpixel))
 
-    #Healpixel Set-up
-    ztf_frames = frames[(frames["dataset_id"] == "ztf")]
-    ztf_frames_sorted = ztf_frames.sort_values("exposure_mjd_mid")
-    merged_healpixels = pd.merge_asof(ztf_frames_sorted, coords_df, left_on="exposure_mjd_mid", right_on="time", by="healpixel", tolerance=dur).dropna() #by="healpixel"
+    intersections_source = ColumnDataSource(data=intersections)
 
-    healpixel_time_groups = merged_healpixels.groupby('healpixel')
-    pixels = list(healpixel_time_groups.groups.keys())
-    #time_lists = list(healpixel_time_groups['exposure_mjd_mid'].apply(list))
+    plot.add_tools(ResetTool())
+    plot.add_tools(BoxZoomTool())
+    plot.add_tools(PanTool())
+    plot.multi_line('start_end', 'healpixel_tuple', color='color', line_cap='round', line_width=6, line_alpha=0.25, source=intersections_source)
+    points = plot.circle('time', 'condensed_healpixel', color='color', size=4, alpha=1, source=intersections_source)
+    plot.yaxis.visible = False
+    plot.yaxis.axis_label = "Healpixels"
+    plot.xaxis.axis_label = "Time"
 
-    healpixels_df = pd.DataFrame(data={'healpixel':pixels, 'times':list(healpixel_time_groups['exposure_mjd_mid'].apply(list)), 'id':list(healpixel_time_groups['id'].apply(list)), 'dataset_id':list(healpixel_time_groups['dataset_id'].apply(list)), 'exposure_id':list(healpixel_time_groups['exposure_id'].apply(list)), 'obscode':list(healpixel_time_groups['obscode'].apply(list))})
-    pixels_list = healpixels_df['healpixel'].tolist()
+    hover_opts = dict(
+        renderers=[points],
+        tooltips=[
+        ("MJD Exposure (Start, End)", "(@exposure_mjd_start{0.000000}, @exposure_mjd_end{0.000000})"),
+        ("Healpixel", "@healpixel"),
+        ("Position (RA, Dec)", "(@ra{0.00}, @dec{0.00})"),
+        ("Dataset id", "@dataset_id")],
+        formatters={'@exposure_mjd_start':'numeral'},
+        show_arrow=False,
+        line_policy='next'
+    )
+
+    point_hover = HoverTool(**hover_opts) 
+    plot.add_tools(point_hover) 
     
-    #Healpixel Plotting
-    patches = plotHealpixels(plot, pixels_list)
+    return plot
+
     
-    return patches, merged_healpixels
-
-
-
-
-'''
-def plotHealpixels(plot, pixels):
-    """Plot given healpixels as bokeh patches on a given plot. 
+    
+       
+def plotIntersectionHealpixelsMap(plot, intersections, return_patches=False):    
+    """Plot healpixels that intersect with an object's orbit two versions of plots
 
     Keyword arguments:
     plot -- the bokeh figure where the orbit's path is plotted
-    pixels -- list of healpixels to plot 
+    intersections -- table of intersections between frames and orbit tables with respect to time and healpixels
+    time_plot -- if True will generate a timeline-like plot of intersections and return the plot
+    location_plot -- if True will generate a map-like plot of intersections and return the patches representing the intersections
     """
     
-    pixel_boundaries = pixelToBoundaries(pixels)
+    #Find Unique Healpixels
+    pixels = list(intersections['healpixel'].drop_duplicates().sort_values())
     
     #Healpixel Plotting
-    patches = [] #Due to edge cases, there will be more patches than actual healpixels (two patches for one edge healpixel)
-    for pixel in pixel_boundaries.keys():
-            if ((pixel_boundaries.get(pixel)['ra'].max() - pixel_boundaries.get(pixel)['ra'].min()) > 300):
-                left_patch = pixel_boundaries.get(pixel)
-                right_patch = pixel_boundaries.get(pixel).copy(deep=True)
-                for p in range(len(left_patch)):
-                    if (left_patch['ra'][p] > 350):
-                        left_patch['ra'][p] = left_patch['ra'][p] - 360
-                    if (right_patch['ra'][p] < 10):
-                        right_patch['ra'][p] = right_patch['ra'][p] + 360        
-                patches.append(plot.patch(left_patch['ra'],left_patch['dec'], line_width=0.5, line_color='white', color='skyblue'))#,line_color='white', color='skyblue'
-                patches.append(plot.patch(right_patch['ra'],right_patch['dec'], line_width=0.5, line_color='white', color='skyblue'))#,line_color='white', color='skyblue'
-            else:
-                patches.append(plot.patch(pixel_boundaries.get(pixel)['ra'],pixel_boundaries.get(pixel)['dec'], line_width=0.5, line_color='white', color='skyblue'))#,line_color='white', color='skyblue'
+    if return_patches:
+        plot, patches = plotHealpixelsMap(plot, pixels, return_patches)
+        return plot, patches
+    
+    plotHealpixelsMap(plot, pixels, return_patches)
+    return plot
 
-    return patches
-'''
 
-def plotHealpixels(plot, pixels):
+
+
+def plotHealpixelsMap(plot, pixels, return_patches=False):
     """Plot given healpixels as bokeh patches on a given plot. 
 
     Keyword arguments:
@@ -287,8 +352,11 @@ def plotHealpixels(plot, pixels):
 
     tap_tool = TapTool(renderers=patches)
     plot.add_tools(tap_tool)
-            
-    return patches
+    
+    if return_patches:
+        return plot, patches
+    return plot
+
 
 
 
@@ -345,10 +413,20 @@ def objectToCoordsDF(objectName, startDate, endDate, transitions=False):
 
 
 
-def plotSetUp(title):
-    """Create a plot with with (0,360) RA as x-axis and (-90,90) Dec as y-axis named the variable title."""
+def plotSetUp(title, height=400, width=400, map_plot=True):
+    """Create an empty plot with a specified title, width, and height with the option of a range of (0,360) RA as x-axis and (-90,90) Dec as y-axis.
+    
+    Keyword arguments:
+    title -- Title displayed at top of plot
+    height -- height of plot
+    width -- width of plot
+    map_plot -- if True the plot's box range will match ra and dec ranges
+    """
     plot = figure(title=title, x_axis_label='ra', y_axis_label='dec', tools=[BoxZoomTool(), ResetTool()])
-    plot.x_range = Range1d(0, 360)
-    plot.y_range = Range1d(-90, 90)
+    if map_plot:
+        plot.x_range = Range1d(0,360)
+        plot.y_range = Range1d(-90,90)
+    plot.height = height
+    plot.width = width
     return plot
 
